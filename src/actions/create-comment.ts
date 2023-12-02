@@ -1,0 +1,54 @@
+"use server"
+import { auth } from "@/auth"
+import { db } from "@/db"
+import { z } from "zod"
+import { revalidatePath } from "next/cache"
+import paths from "@/paths"
+
+const createCommentSchema = z.object({
+  content: z.string().min(3),
+})
+
+interface CreateCommentProps {
+  errors: { content?: string[]; _form?: string[] }
+  success?: boolean
+}
+export const createComment = async (
+  { postId, parentId }: { postId: string; parentId: string },
+  formState: CreateCommentProps,
+  formData: FormData
+): Promise<CreateCommentProps> => {
+  const result = createCommentSchema.safeParse({
+    content: formData.get("content"),
+  })
+
+  if (!result.success) return { errors: result.error.flatten().fieldErrors }
+  console.log(result)
+
+  const session = await auth()
+  if (!session || !session.user)
+    return { errors: { _form: ["You must be signed in to do this"] } }
+
+  try {
+    await db.comment.create({
+      data: {
+        content: result.data.content,
+        postId: postId,
+        parentId: parentId,
+        userId: session.user.id,
+      },
+    })
+  } catch (err: unknown) {
+    if (err instanceof Error) return { errors: { _form: [err.message] } }
+    else return { errors: { _form: ["Something went wrong"] } }
+  }
+
+  const topic = await db.topic.findFirst({
+    where: { posts: { some: { id: postId } } },
+  })
+  if (!topic) return { errors: { _form: ["Failed to get topic"] } }
+
+  revalidatePath(paths.postShow(topic.slug, postId))
+
+  return { errors: {}, success: true }
+}
